@@ -4,16 +4,16 @@
 
 #pragma once
 
-BOOL DumpSecurityDescriptorFromUserObject(HANDLE);
+//#define _GUI
+//#define _TRACING
 
-BOOL GetTokenSID(HANDLE, PSID*);
-VOID FreeLogonSID(PSID*);
+VOID EnumPrivileges(HANDLE Token);
+BOOL EnablePrivilege(HANDLE Token, LPWSTR Name, BOOL Enabled);
+BOOL CheckPrivilege(HANDLE Token, LPCWSTR PrivilegeName, LPLONG Privileged);
 
-BOOL AddAceToWindowStation(HWINSTA, PSID);
-BOOL AddAceToDesktop(HDESK, PSID);
-BOOL RemoveAceFromWindowStation(HWINSTA, PSID);
-BOOL RemoveAceFromDesktop(HDESK, PSID);
+BOOL GetLogonSidFromToken(HANDLE Token, PSID *outSid);
+BOOL AddAceToWindowStation(HWINSTA Winsta, PSID Sid);
+BOOL AddAceToDesktop(HDESK Desktop, PSID Sid);
+BOOL RemoveAccessAllowedAcesBasedSID(HANDLE Object, PSID Sid);
 
-VOID EnumPrivileges(HANDLE);
-BOOL CheckPrivilege(HANDLE, LPCWSTR, LPBOOL);
-BOOL EnablePrivilege(HANDLE, LPWSTR, BOOL);
+VOID RunAs(LPWSTR inUser, LPWSTR inPW, LPWSTR inCommand);

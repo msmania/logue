@@ -2,11 +2,14 @@
 // main.cpp
 //
 
+#include <iostream>
 #include <stdio.h>
 #include <locale.h>
 #include <Windows.h>
 
 #include "logue.h"
+
+using namespace std;
 
 /*
 
@@ -24,17 +27,17 @@ Privilege: http://msdn.microsoft.com/en-us/library/bb530716.aspx
 
 */
 
-void RunAs(LPWSTR, LPWSTR, LPWSTR);
-
 void ShowUsage() {
-	wprintf(L"\nUsage: logue -runas <user> <password> <command>\n");
-	wprintf(L"       logue -priv Enum\n       logue -priv Check <privilege>\n");
-	wprintf(L"       logue -priv Enable <privilege>\n");
-	wprintf(L"       logue -priv Disable <privilege>\n\nExample:\n");
-	wprintf(L"    logue domain\\user password ");
-	wprintf(L"\"c:\\windows\\system32\\notepad.exe c:\\temp\\temp.txt\"\n");
-	wprintf(L"    logue -priv check SeSecurityPrivilege\n\n");
-	wprintf(L"Privilege: http://msdn.microsoft.com/en-us/library/bb530716.aspx\n\n");
+	wcout << L"\nUsage: logue -runas <user> <password> <command>" << endl;
+	wcout << L"       logue -priv All" << endl;
+	wcout << L"       logue -priv Enum" << endl;
+	wcout << L"       logue -priv Check <privilege>" << endl;
+	wcout << L"       logue -priv Enable <privilege>" << endl;
+	wcout << L"       logue -priv Disable <privilege>" << endl << endl;
+	wcout << L"Example:" << endl;
+	wcout << L"    logue -runas domain\\user password \"c:\\windows\\system32\\notepad.exe c:\\temp\\temp.txt\"" << endl;
+	wcout << L"    logue -priv check SeSecurityPrivilege" << endl << endl;
+	wcout << L"Privilege: http://msdn.microsoft.com/en-us/library/bb530716.aspx" << endl << endl;
 }
 
 #define MAX_COMMAND 16
@@ -66,29 +69,34 @@ int wmain(int argc, wchar_t *argv[]) {
 		}
 
 		RunAs(argv[2], argv[3], argv[4]);
-
-		return 0;
 	}
 	else if ( wcscmp(Command, L"-PRIV")==0 ) {
 		HANDLE Token= NULL;
 		if ( !OpenProcessToken(GetCurrentProcess(), TOKEN_ALL_ACCESS , &Token) ) {
-			wprintf(L"Failed to get Token - 0x%08x\n", GetLastError());
+			wprintf(L"OpenProcessToken failed - 0x%08x\n", GetLastError());
 			return 0;
 		}
 
 		Command= ToUpper(argv[2]);
-		if ( wcscmp(Command, L"ENUM")==0 ) {
+		if ( wcscmp(Command, L"ENUM")==0 )
 			EnumPrivileges(Token);
-		}
+		else if ( wcscmp(Command, L"ALL")==0 )
+			EnumPrivileges(NULL);
 		else if ( argc>=4 && wcscmp(Command, L"CHECK")==0 ) {
-			BOOL Ret= FALSE;
+			LONG Ret= 0;
 			if ( CheckPrivilege(Token, argv[3], &Ret) )
-				wprintf(L"%s is %s.\n", argv[3], Ret ? L"ENABLED" : L"DISABLED");
+				wprintf(L"%s is %s.\n", argv[3],
+					Ret>0 ? L"ENABLED" :
+					Ret<0 ? L"NOT ASSIGNED" : L"DISABLED");
 		}
-		else if ( argc>=4 && wcscmp(Command, L"ENABLE")==0 )
-			EnablePrivilege(Token, argv[3], TRUE);
-		else if ( argc>=4 && wcscmp(Command, L"DISABLE")==0 )
-			EnablePrivilege(Token, argv[3], FALSE);
+		else if ( argc>=4 && wcscmp(Command, L"ENABLE")==0 ) {
+			if ( EnablePrivilege(Token, argv[3], TRUE) )
+				EnumPrivileges(Token);
+		}
+		else if ( argc>=4 && wcscmp(Command, L"DISABLE")==0 ) {
+			if ( EnablePrivilege(Token, argv[3], FALSE) )
+				EnumPrivileges(Token);
+		}
 		else {
 			wprintf(L"Bad command - %s\n", argv[1]);
 			return ERROR_BAD_COMMAND;
@@ -101,6 +109,6 @@ int wmain(int argc, wchar_t *argv[]) {
 		wprintf(L"Unknown command - %s\n", argv[1]);
 		return ERROR_INVALID_PARAMETER;
 	}
-	
+
 	return 0;
 }

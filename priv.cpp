@@ -5,11 +5,14 @@
 #include <windows.h>
 #include <stdio.h>
 
+#include "logue.h"
+
 #define MAX_PRIVNAME 32
+#define MAX_PRIVSCAN 256
 
 struct PRIVILAGENAME_MAPPING {
-	WCHAR Label[MAX_PRIVNAME];
-	WCHAR Name[MAX_PRIVNAME];
+	WCHAR SymbolName[MAX_PRIVNAME];
+	WCHAR PrivilegeName[MAX_PRIVNAME];
 };
 
 const PRIVILAGENAME_MAPPING PrivilegeNameMapping[]= {
@@ -17,7 +20,7 @@ const PRIVILAGENAME_MAPPING PrivilegeNameMapping[]= {
 	{ L"SE_ASSIGNPRIMARYTOKEN_NAME", SE_ASSIGNPRIMARYTOKEN_NAME },
 	{ L"SE_LOCK_MEMORY_NAME", SE_LOCK_MEMORY_NAME },
 	{ L"SE_INCREASE_QUOTA_NAME", SE_INCREASE_QUOTA_NAME },
-	{ L"SE_UNSOLICITED_INPUT_NAME", SE_UNSOLICITED_INPUT_NAME },
+	{ L"SE_UNSOLICITED_INPUT_NAME", SE_UNSOLICITED_INPUT_NAME }, // no LUID?
 	{ L"SE_MACHINE_ACCOUNT_NAME", SE_MACHINE_ACCOUNT_NAME },
 	{ L"SE_TCB_NAME", SE_TCB_NAME },
 	{ L"SE_SECURITY_NAME", SE_SECURITY_NAME },
@@ -51,13 +54,52 @@ const PRIVILAGENAME_MAPPING PrivilegeNameMapping[]= {
 	{ L"", L"" }
 };
 
-BOOL LookupPrivilegeValueEx(LPCWSTR SystemName, LPCWSTR PrivilegeName, PLUID Luid) {
-	BOOL Ret= LookupPrivilegeValue(SystemName, PrivilegeName, Luid);
+BOOL LookupPrivilegeName(LPCWSTR SystemName, CONST PLUID Luid, LPCWSTR *SymbolName,
+						LPWSTR PrivilegeName, LPDWORD PrivilegeNameLength,
+						LPWSTR DisplayName, LPDWORD DisplayNameLength, BOOL NoErrMsg) {
+	BOOL Ret= FALSE;
+	DWORD LanguageId;
+	int Index= -1;
+
+	Ret= LookupPrivilegeName(NULL, Luid, PrivilegeName, PrivilegeNameLength);
+	if ( !Ret ) {
+		if ( GetLastError()!=ERROR_INSUFFICIENT_BUFFER && !NoErrMsg )
+			wprintf(L"LookupPrivilegeName failed - 0x%08x\n", GetLastError());
+		goto cleanup;
+	}
+
+	Ret= LookupPrivilegeDisplayName(NULL, PrivilegeName, DisplayName, DisplayNameLength, &LanguageId);
+	if ( !Ret ) {
+		if ( GetLastError()!=ERROR_INSUFFICIENT_BUFFER && !NoErrMsg )
+			wprintf(L"LookupPrivilegeDisplayName failed - 0x%08x\n", GetLastError());
+		goto cleanup;
+	}
+
+	Ret= FALSE;
+	const PRIVILAGENAME_MAPPING *p=PrivilegeNameMapping;
+	for ( Index=0 ; p->SymbolName[0]!=0 ; ++p, ++Index ) {
+		if ( wcscmp(PrivilegeName, p->PrivilegeName)==0 ) {
+			Ret= TRUE;
+			break;
+		}
+	}
+
+	if ( Ret )
+		*SymbolName= PrivilegeNameMapping[Index].SymbolName;
+	else if ( NoErrMsg )
+		wprintf(L"%s not found\n", PrivilegeName);
+
+cleanup:
+	return Ret;
+}
+
+BOOL LookupPrivilegeValueEx(LPCWSTR SystemName, LPCWSTR Name, PLUID Luid) {
+	BOOL Ret= LookupPrivilegeValue(SystemName, Name, Luid);
 	if ( !Ret && GetLastError()==ERROR_NO_SUCH_PRIVILEGE ) {
 		const PRIVILAGENAME_MAPPING *p;
-		for ( p=PrivilegeNameMapping ; p->Label[0]!=0 ; ++p ) {
-			if ( wcscmp(PrivilegeName, p->Label)==0 )
-				return LookupPrivilegeValue(SystemName, p->Name, Luid);
+		for ( p=PrivilegeNameMapping ; p->SymbolName[0]!=0 ; ++p ) {
+			if ( wcscmp(Name, p->SymbolName)==0 )
+				return LookupPrivilegeValue(SystemName, p->PrivilegeName, Luid);
 		}
 		SetLastError(ERROR_NO_SUCH_PRIVILEGE);
 		Ret= FALSE;
@@ -66,56 +108,90 @@ BOOL LookupPrivilegeValueEx(LPCWSTR SystemName, LPCWSTR PrivilegeName, PLUID Lui
 }
 
 VOID EnumPrivileges(HANDLE Token) {
+	BOOL Ret= FALSE;
 	DWORD TokenLength= 0;
 	PTOKEN_PRIVILEGES TokenPriv= NULL;
-
-	if ( !GetTokenInformation(Token, TokenPrivileges, NULL, 0, &TokenLength) &&
-			GetLastError()!=ERROR_INSUFFICIENT_BUFFER ) {
-		wprintf(L"GetTokenInformation (size check) failed - 0x%08x\n", GetLastError());
-		goto cleanup;
-	}
-
-	TokenPriv= (PTOKEN_PRIVILEGES)HeapAlloc(GetProcessHeap(), 0, TokenLength);
-	if ( !TokenPriv ) {
-		wprintf(L"HeapAlloc failed - 0x%08x\n", GetLastError());
-		goto cleanup;
-	}
-
-	if ( !GetTokenInformation(Token, TokenPrivileges, TokenPriv, TokenLength, &TokenLength) ) {
-		wprintf(L"GetTokenInformation failed - 0x%08x\n", GetLastError());
-		goto cleanup;
-	}
+	DWORD PrivilegeNameLength= 256;
+	DWORD DisplayNameLength= 256;
+	PWCHAR PrivilegeName= NULL;
+	PWCHAR DisplayName= NULL;
+	LPCWCHAR SymbolName= NULL;
 	
 	// LUID = Locally Unique Identifier
-	wprintf(L"----------------------------------------\n");
-	wprintf(L"   PrivilegeName, DisplayName (LUID)\n");
-	wprintf(L"----------------------------------------\n");
+	wprintf(L"-------------------------------------------------------------------------------------------------------\n");
+	wprintf(L"   LUID                Symbol                           PrivilegeName                    DisplayName\n");
+	wprintf(L"-------------------------------------------------------------------------------------------------------\n");
 
-	WCHAR DisplayName[256];
-	WCHAR ProgramName[256];
+	if ( Token ) {
+		if ( !GetTokenInformation(Token, TokenPrivileges, NULL, 0, &TokenLength) &&
+				GetLastError()!=ERROR_INSUFFICIENT_BUFFER ) {
+			wprintf(L"GetTokenInformation (size check) failed - 0x%08x\n", GetLastError());
+			goto cleanup;
+		}
+
+		TokenPriv= (PTOKEN_PRIVILEGES)HeapAlloc(GetProcessHeap(), 0, TokenLength);
+		if ( !TokenPriv ) {
+			wprintf(L"HeapAlloc failed - 0x%08x\n", GetLastError());
+			goto cleanup;
+		}
+
+		if ( !GetTokenInformation(Token, TokenPrivileges, TokenPriv, TokenLength, &TokenLength) ) {
+			wprintf(L"GetTokenInformation failed - 0x%08x\n", GetLastError());
+			goto cleanup;
+		}
+
+	}
+	else {
+		TokenPriv= (PTOKEN_PRIVILEGES)HeapAlloc(GetProcessHeap(), 0,
+			sizeof(DWORD)+sizeof(LUID_AND_ATTRIBUTES)*MAX_PRIVSCAN);
+		if ( !TokenPriv ) {
+			wprintf(L"HeapAlloc failed - 0x%08x\n", GetLastError());
+			goto cleanup;
+		}
+		
+		TokenPriv->PrivilegeCount= MAX_PRIVSCAN;
+		for (  LONGLONG i=0 ; i<MAX_PRIVSCAN ; ++i ) {
+			TokenPriv->Privileges[i].Luid= *(PLUID)&i;
+			TokenPriv->Privileges[i].Attributes= 0;
+		}
+	}
+	
 	for ( DWORD i=0 ; i<TokenPriv->PrivilegeCount ; ++i ) {
-		DWORD LanguageID= 0;
-		DWORD PrivilegeLength= sizeof(ProgramName);
-		LookupPrivilegeName(NULL, &TokenPriv->Privileges[i].Luid, ProgramName, &PrivilegeLength);
+		do {
+			if ( PrivilegeName ) delete [] PrivilegeName;
+			if ( DisplayName ) delete [] DisplayName;
 
-		PrivilegeLength= sizeof(DisplayName);
-		LookupPrivilegeDisplayName(NULL, ProgramName, DisplayName, &PrivilegeLength, &LanguageID);
+			PrivilegeName= new WCHAR[PrivilegeNameLength];
+			DisplayName= new WCHAR[DisplayNameLength];
 
-		BOOL b= TokenPriv->Privileges[i].Attributes&SE_PRIVILEGE_ENABLED;
+			Ret= LookupPrivilegeName(NULL, &TokenPriv->Privileges[i].Luid, &SymbolName,
+					PrivilegeName, &PrivilegeNameLength,
+					DisplayName, &DisplayNameLength,
+					Token==NULL);
+		} while( !Ret && GetLastError()==ERROR_INSUFFICIENT_BUFFER );
 
-		wprintf(L"%s, %s, %s (%I64d)\n",
-			b ? L"O": L"X",
-			ProgramName,
-			DisplayName,
-			TokenPriv->Privileges[i].Luid);
+		if ( Ret ) {
+			wprintf(L"%s 0x%08x`%08x %-32s %-32s %s\n",
+				Token ? TokenPriv->Privileges[i].Attributes&SE_PRIVILEGE_ENABLED ? L" O": L" X" : L"  ",
+				TokenPriv->Privileges[i].Luid.HighPart,
+				TokenPriv->Privileges[i].Luid.LowPart,
+				SymbolName,
+				PrivilegeName,
+				DisplayName);
+		}
 	}
 
 cleanup:
+	if ( PrivilegeName ) delete [] PrivilegeName;
+	if ( DisplayName ) delete [] DisplayName;
 	if ( TokenPriv ) HeapFree(GetProcessHeap(), 0, TokenPriv);
-
 }
 
-BOOL CheckPrivilege(HANDLE Token, LPCWSTR PrivilegeName, LPBOOL Privileged) {
+
+// >0 Enabled
+// =0 Disabled
+// <0 Not assigned
+BOOL CheckPrivilege(HANDLE Token, LPCWSTR PrivilegeName, LPLONG Privileged) {
 	LUID luid;
 	if ( !LookupPrivilegeValueEx(NULL, PrivilegeName, &luid) ){
 		wprintf(L"LookupPrivilegeValue failed - 0x%08x\n", GetLastError());
@@ -128,17 +204,34 @@ BOOL CheckPrivilege(HANDLE Token, LPCWSTR PrivilegeName, LPBOOL Privileged) {
 	PrivilegeSet.Privilege[0].Luid= luid;
 	PrivilegeSet.Privilege[0].Attributes= 0; // not used
 
-	if ( !PrivilegeCheck(Token, &PrivilegeSet, Privileged) ) {
+	BOOL Check;
+	if ( !PrivilegeCheck(Token, &PrivilegeSet, &Check) ) {
 		wprintf(L"PrivilegeCheck failed - 0x%08x\n", GetLastError());
 		return FALSE;
+	}
+	
+	if ( Check )
+		*Privileged= 1;
+	else {
+		TOKEN_PRIVILEGES tp;
+		tp.PrivilegeCount= 1;
+		tp.Privileges[0].Luid= luid;
+		tp.Privileges[0].Attributes= 0;
+
+		if ( !AdjustTokenPrivileges(Token, FALSE, &tp, sizeof(TOKEN_PRIVILEGES), NULL, NULL) ) {
+			wprintf(L"AdjustTokenPrivileges failed - 0x%08x\n", GetLastError());
+			return FALSE;
+		}
+
+		*Privileged= (GetLastError()==ERROR_NOT_ALL_ASSIGNED) ? -1 : 0;
 	}
 
 	return TRUE;
 }
  
-BOOL EnablePrivilege(HANDLE Token, LPWSTR PrivilegeName, BOOL Enabled) {
+BOOL EnablePrivilege(HANDLE Token, LPWSTR Name, BOOL Enabled) {
 	LUID luid;
-	if ( !LookupPrivilegeValueEx(NULL, PrivilegeName, &luid) ){
+	if ( !LookupPrivilegeValueEx(NULL, Name, &luid) ) {
 		wprintf(L"LookupPrivilegeValue failed - 0x%08x\n", GetLastError());
 		return FALSE;
 	}
@@ -152,8 +245,13 @@ BOOL EnablePrivilege(HANDLE Token, LPWSTR PrivilegeName, BOOL Enabled) {
 		wprintf(L"AdjustTokenPrivileges failed - 0x%08x\n", GetLastError());
 		return FALSE;
 	}
+	
+	if ( GetLastError()==ERROR_NOT_ALL_ASSIGNED ) {
+		wprintf(L"The process token does not have %s (%I64d).\n", Name, luid);
+		return FALSE;
+	}
 
-	wprintf(L"# %s (%I64d) is temporarily %s.\n", PrivilegeName, luid,
+	wprintf(L"%s (%I64d) is temporarily %s.\n", Name, luid,
 		Enabled ? L"enabled" : L"disabled");
 
 	return TRUE;
