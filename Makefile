@@ -19,7 +19,8 @@ CFLAGS=\
     /D_UNICODE\
     /DUNICODE\
 #    /O2\
-    /W3
+    /W3\
+    /EHsc
 
 LFLAGS=\
     /NOLOGO\

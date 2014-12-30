@@ -15,6 +15,7 @@ using namespace std;
 
 Usage: logue -runas <user> <password> <command>
        logue -priv Enum
+	   logue -priv Add <privilege>
 	   logue -priv Check <privilege>
 	   logue -priv Enable <privilege>
 	   logue -priv Disable <privilege>
@@ -31,6 +32,7 @@ void ShowUsage() {
 	wcout << L"\nUsage: logue -runas <user> <password> <command>" << endl;
 	wcout << L"       logue -priv All" << endl;
 	wcout << L"       logue -priv Enum" << endl;
+	wcout << L"       logue -priv Add <privilege>" << endl;
 	wcout << L"       logue -priv Check <privilege>" << endl;
 	wcout << L"       logue -priv Enable <privilege>" << endl;
 	wcout << L"       logue -priv Disable <privilege>" << endl << endl;
@@ -79,9 +81,11 @@ int wmain(int argc, wchar_t *argv[]) {
 
 		Command= ToUpper(argv[2]);
 		if ( wcscmp(Command, L"ENUM")==0 )
-			EnumPrivileges(Token);
+			EnumPrivileges(Token, FALSE);
 		else if ( wcscmp(Command, L"ALL")==0 )
-			EnumPrivileges(NULL);
+			EnumPrivileges(Token, TRUE);
+		else if ( argc>=4 && wcscmp(Command, L"ADD")==0 )
+			AddPrivilege(Token, argv[3]);
 		else if ( argc>=4 && wcscmp(Command, L"CHECK")==0 ) {
 			LONG Ret= 0;
 			if ( CheckPrivilege(Token, argv[3], &Ret) )
@@ -91,11 +95,11 @@ int wmain(int argc, wchar_t *argv[]) {
 		}
 		else if ( argc>=4 && wcscmp(Command, L"ENABLE")==0 ) {
 			if ( EnablePrivilege(Token, argv[3], TRUE) )
-				EnumPrivileges(Token);
+				EnumPrivileges(Token, FALSE);
 		}
 		else if ( argc>=4 && wcscmp(Command, L"DISABLE")==0 ) {
 			if ( EnablePrivilege(Token, argv[3], FALSE) )
-				EnumPrivileges(Token);
+				EnumPrivileges(Token, FALSE);
 		}
 		else {
 			wprintf(L"Bad command - %s\n", argv[1]);

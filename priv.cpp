@@ -3,12 +3,16 @@
 //
 
 #include <windows.h>
+#include <NTSecAPI.h>
 #include <stdio.h>
+#include <strsafe.h>
 
 #include "logue.h"
 
 #define MAX_PRIVNAME 32
 #define MAX_PRIVSCAN 256
+
+#define STATUS_SUCCESS ((NTSTATUS)0x00000000L) // ntsubauth
 
 struct PRIVILAGENAME_MAPPING {
 	WCHAR SymbolName[MAX_PRIVNAME];
@@ -107,7 +111,7 @@ BOOL LookupPrivilegeValueEx(LPCWSTR SystemName, LPCWSTR Name, PLUID Luid) {
 	return Ret;
 }
 
-VOID EnumPrivileges(HANDLE Token) {
+VOID EnumPrivileges(HANDLE Token, BOOL All) {
 	BOOL Ret= FALSE;
 	DWORD TokenLength= 0;
 	PTOKEN_PRIVILEGES TokenPriv= NULL;
@@ -122,7 +126,7 @@ VOID EnumPrivileges(HANDLE Token) {
 	wprintf(L"   LUID                Symbol                           PrivilegeName                    DisplayName\n");
 	wprintf(L"-------------------------------------------------------------------------------------------------------\n");
 
-	if ( Token ) {
+	if ( !All ) {
 		if ( !GetTokenInformation(Token, TokenPrivileges, NULL, 0, &TokenLength) &&
 				GetLastError()!=ERROR_INSUFFICIENT_BUFFER ) {
 			wprintf(L"GetTokenInformation (size check) failed - 0x%08x\n", GetLastError());
@@ -167,12 +171,22 @@ VOID EnumPrivileges(HANDLE Token) {
 			Ret= LookupPrivilegeName(NULL, &TokenPriv->Privileges[i].Luid, &SymbolName,
 					PrivilegeName, &PrivilegeNameLength,
 					DisplayName, &DisplayNameLength,
-					Token==NULL);
+					All);
 		} while( !Ret && GetLastError()==ERROR_INSUFFICIENT_BUFFER );
 
 		if ( Ret ) {
-			wprintf(L"%s 0x%08x`%08x %-32s %-32s %s\n",
-				Token ? TokenPriv->Privileges[i].Attributes&SE_PRIVILEGE_ENABLED ? L" O": L" X" : L"  ",
+			WCHAR Mark= 0;
+			if ( All ) {
+				LONG l= 0;
+				CheckPrivilege(Token, PrivilegeName, &l);
+				Mark= l==0 ? Mark= 'X' :
+					l>0 ? Mark= 'O' : '-';
+			}
+			else {
+				Mark= TokenPriv->Privileges[i].Attributes&SE_PRIVILEGE_ENABLED ? L'O' : L'X';
+			}
+
+			wprintf(L" %c 0x%08x`%08x %-32s %-32s %s\n", Mark,
 				TokenPriv->Privileges[i].Luid.HighPart,
 				TokenPriv->Privileges[i].Luid.LowPart,
 				SymbolName,
@@ -187,6 +201,70 @@ cleanup:
 	if ( TokenPriv ) HeapFree(GetProcessHeap(), 0, TokenPriv);
 }
 
+// http://msdn.microsoft.com/en-us/library/ms722492(v=VS.85) InitLsaString
+// http://msdn.microsoft.com/en-us/library/ms721874(v=vs.85).aspx
+// http://msdn.microsoft.com/en-us/library/ms721863(v=vs.85).aspx
+BOOL AddPrivilege(HANDLE Token, LPCWSTR PrivilegeName) {
+	NTSTATUS Ret= 0;
+	LSA_OBJECT_ATTRIBUTES ObjectAttributes;
+	LSA_HANDLE PolicyHandle= NULL;
+	PSID Sid= NULL;
+	LSA_UNICODE_STRING Privilege[1];
+	size_t PrivNameLength= 0;
+	PTOKEN_USER CurrentUserSid= NULL;
+	DWORD CurrentUserSidLength= 0;
+
+	// get current user SID from the token
+	if ( !GetTokenInformation(Token, TokenUser, NULL, 0, &CurrentUserSidLength) &&
+			GetLastError()!=ERROR_INSUFFICIENT_BUFFER ) {
+		wprintf(L"GetTokenInformation (size check) failed - 0x%08x\n", GetLastError());
+		goto cleanup;
+	}
+
+	CurrentUserSid= (PTOKEN_USER)HeapAlloc(GetProcessHeap(), 0, CurrentUserSidLength);
+	if ( !CurrentUserSid ) {
+		wprintf(L"HeapAlloc failed - 0x%08x\n", GetLastError());
+		goto cleanup;
+	}
+
+	if ( !GetTokenInformation(Token, TokenUser, CurrentUserSid,
+			CurrentUserSidLength, &CurrentUserSidLength) ) {
+		wprintf(L"GetTokenInformation failed - 0x%08x\n", GetLastError());
+		goto cleanup;
+	}
+	
+	PrivNameLength= StringCchLength(PrivilegeName, MAX_PRIVNAME, &PrivNameLength);
+	Privilege[0].Buffer= (PWCHAR)PrivilegeName;
+	Privilege[0].Length= PrivNameLength*sizeof(WCHAR);
+	Privilege[0].MaximumLength= (PrivNameLength+1)*sizeof(WCHAR);
+	
+	ZeroMemory(&ObjectAttributes, sizeof(ObjectAttributes));
+	Ret= LsaOpenPolicy(NULL, &ObjectAttributes, POLICY_ALL_ACCESS, &PolicyHandle);
+	if ( Ret!=STATUS_SUCCESS ) {
+		wprintf(L"LsaOpenPolicy failed - 0x%08x\n", LsaNtStatusToWinError(Ret));
+		goto cleanup;
+	}
+
+	StringCchLength(PrivilegeName, MAX_PRIVNAME, &PrivNameLength);
+	Privilege[0].Buffer= (PWCHAR)PrivilegeName;
+	Privilege[0].Length= PrivNameLength*sizeof(WCHAR);
+	Privilege[0].MaximumLength= (PrivNameLength+1)*sizeof(WCHAR);
+
+	Ret= LsaAddAccountRights(PolicyHandle, CurrentUserSid->User.Sid, Privilege, 1);;
+	if ( Ret!=STATUS_SUCCESS ) {
+		wprintf(L"LsaAddAccountRights failed - 0x%08x\n", LsaNtStatusToWinError(Ret));
+		goto cleanup;
+	}
+
+	wprintf(L"Privilege '%s' was assigned successfully.\n", PrivilegeName);
+	wprintf(L"To apply it to the token, re-log on the system.\n");
+
+cleanup:
+	if ( PolicyHandle ) LsaClose(PolicyHandle);	
+	if ( CurrentUserSid ) HeapFree(GetProcessHeap(), 0, CurrentUserSid);
+
+	return Ret==STATUS_SUCCESS;
+}
 
 // >0 Enabled
 // =0 Disabled

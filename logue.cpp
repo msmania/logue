@@ -28,11 +28,11 @@ VOID RunAs(LPWSTR inUser, LPWSTR inPW, LPWSTR inCommand) {
 	
 	CheckPrivilege(CallerToken, SE_INCREASE_QUOTA_NAME, &PrivCheck);
 	if ( PrivCheck<0 )
-		wprintf(L"CreateProcessAsUser requires SE_INCREASE_QUOTA_NAME.  Check the user's privileges.\n");
+		wprintf(L"CreateProcessAsUser requires %s.  Check the user's privileges.\n", SE_INCREASE_QUOTA_NAME);
 
 	CheckPrivilege(CallerToken, SE_ASSIGNPRIMARYTOKEN_NAME, &PrivCheck);
 	if ( PrivCheck<0 )
-		wprintf(L"CreateProcessAsUser requires SE_ASSIGNPRIMARYTOKEN_NAME.  Check the user's privileges.\n");
+		wprintf(L"CreateProcessAsUser requires %s.  Check the user's privileges.\n", SE_ASSIGNPRIMARYTOKEN_NAME);
 	
 	if ( !LogonUser(inUser, NULL, inPW, LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT, &CalleeToken) ) {
 		wprintf(L"LogonUser failed - 0x%08x\n", GetLastError());
@@ -100,15 +100,15 @@ VOID RunAs(LPWSTR inUser, LPWSTR inPW, LPWSTR inCommand) {
 		wprintf(L"CreateProcessAsUser failed - 0x%08x\n", GetLastError());
 		goto Cleanup;
 	}
-
+	
+	WaitForSingleObject(pi.hProcess, INFINITE);
+	
 	RevertToSelf();
 
 #ifdef _GUI
 	RemoveAccessAllowedAcesBasedSID(Winsta0, LogonSid);
 	RemoveAccessAllowedAcesBasedSID(Desktop, LogonSid);
 #endif
-	
-	WaitForSingleObject(pi.hProcess, INFINITE);
 	
 	CloseHandle(pi.hProcess);
 	CloseHandle(pi.hThread);

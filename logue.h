@@ -7,7 +7,8 @@
 //#define _GUI
 //#define _TRACING
 
-VOID EnumPrivileges(HANDLE Token);
+VOID EnumPrivileges(HANDLE Token, BOOL All);
+BOOL AddPrivilege(HANDLE Token, LPCWSTR PrivilegeName);
 BOOL EnablePrivilege(HANDLE Token, LPWSTR Name, BOOL Enabled);
 BOOL CheckPrivilege(HANDLE Token, LPCWSTR PrivilegeName, LPLONG Privileged);
 
